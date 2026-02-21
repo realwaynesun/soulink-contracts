@@ -135,7 +135,7 @@ contract SoulinkRegistry is
     function resolve(string calldata name) external view returns (AgentIdentity memory) {
         bytes32 nameHash = keccak256(abi.encodePacked(name));
         AgentIdentity storage identity = _identities[nameHash];
-        require(identity.tokenId != 0, "Name not registered");
+        require(identity.tokenId != 0 && block.timestamp <= identity.expiresAt, "Name not registered");
         return identity;
     }
 
@@ -164,7 +164,7 @@ contract SoulinkRegistry is
     function updateSoulFor(
         string calldata name,
         bytes32 newSoulHash
-    ) external onlyOperator {
+    ) external whenNotPaused onlyOperator {
         bytes32 nameHash = keccak256(abi.encodePacked(name));
         AgentIdentity storage identity = _identities[nameHash];
 
@@ -181,7 +181,7 @@ contract SoulinkRegistry is
     function updatePaymentAddressFor(
         string calldata name,
         address newPaymentAddress
-    ) external onlyOperator {
+    ) external whenNotPaused onlyOperator {
         bytes32 nameHash = keccak256(abi.encodePacked(name));
         AgentIdentity storage identity = _identities[nameHash];
 
@@ -200,7 +200,7 @@ contract SoulinkRegistry is
     function storeEncryptedSoulFor(
         string calldata name,
         bytes calldata encryptedData
-    ) external onlyOperator {
+    ) external whenNotPaused onlyOperator {
         bytes32 nameHash = keccak256(abi.encodePacked(name));
         AgentIdentity storage identity = _identities[nameHash];
 
