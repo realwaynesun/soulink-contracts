@@ -47,7 +47,7 @@ contract Deploy is Script {
         // Deploy proxy pointing to implementation, calling initialize()
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(implementation),
-            abi.encodeCall(SoulinkRegistry.initialize, (usdcAddress, deployer))
+            abi.encodeCall(SoulinkRegistry.initialize, (usdcAddress, deployer, 50e6, 1e6))
         );
 
         vm.stopBroadcast();

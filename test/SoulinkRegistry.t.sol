@@ -53,7 +53,7 @@ contract SoulinkRegistryTest is Test {
         SoulinkRegistry impl = new SoulinkRegistry();
         ERC1967Proxy proxy = new ERC1967Proxy(
             address(impl),
-            abi.encodeCall(SoulinkRegistry.initialize, (address(usdc), owner))
+            abi.encodeCall(SoulinkRegistry.initialize, (address(usdc), owner, 50e6, 1e6))
         );
         registry = SoulinkRegistry(address(proxy));
         registry.setOperator(operator, true);
@@ -305,13 +305,25 @@ contract SoulinkRegistryTest is Test {
     // --- Pricing ---
 
     function test_price_short() public view {
-        assertEq(registry.getPrice("abc"), 100e6);
-        assertEq(registry.getPrice("abcd"), 100e6);
+        assertEq(registry.getPrice("abc"), 50e6);
+        assertEq(registry.getPrice("abcd"), 50e6);
     }
 
     function test_price_standard() public view {
-        assertEq(registry.getPrice("alice"), 5e6);
-        assertEq(registry.getPrice("longname"), 5e6);
+        assertEq(registry.getPrice("alice"), 1e6);
+        assertEq(registry.getPrice("longname"), 1e6);
+    }
+
+    function test_set_prices() public {
+        registry.setPrices(200e6, 10e6);
+        assertEq(registry.getPrice("abc"), 200e6);
+        assertEq(registry.getPrice("alice"), 10e6);
+    }
+
+    function test_set_prices_revert_not_owner() public {
+        vm.prank(alice);
+        vm.expectRevert();
+        registry.setPrices(200e6, 10e6);
     }
 
     // --- Token-Name mapping ---

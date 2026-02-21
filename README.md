@@ -13,7 +13,7 @@ ERC-721 registry for `.agent` names on Base. Each name is an NFT representing an
 | Feature | Detail |
 |---------|--------|
 | Name format | `[a-z0-9-]{3,32}.agent` |
-| Pricing | $100 USDC (3-4 chars), $5 USDC (5+ chars) |
+| Pricing | Configurable (currently $50 USDC short, $1 USDC standard — promo through March 31, 2026) |
 | Expiry | 365 days, renewable |
 | Payment | Off-chain via [x402](https://www.x402.org/) protocol |
 | Upgradeability | UUPS proxy pattern |

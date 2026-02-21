@@ -48,6 +48,8 @@ interface ISoulinkRegistry {
 
     event OperatorUpdated(address indexed operator, bool authorized);
 
+    event PricesUpdated(uint256 priceShort, uint256 priceStandard);
+
     event EncryptedSoulStored(
         string indexed indexedName,
         string name
@@ -112,7 +114,7 @@ interface ISoulinkRegistry {
     /// @notice Get the annual price for a name in USDC (6 decimals)
     /// @param name The name to price
     /// @return USDC amount with 6 decimals
-    function getPrice(string calldata name) external pure returns (uint256);
+    function getPrice(string calldata name) external view returns (uint256);
 
     /// @notice Get the token ID for a registered name
     /// @param name The .agent name

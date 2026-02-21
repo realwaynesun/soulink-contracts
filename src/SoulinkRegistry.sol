@@ -30,10 +30,6 @@ contract SoulinkRegistry is
     uint256 public constant MIN_NAME_LENGTH = 3;
     uint256 public constant MAX_NAME_LENGTH = 32;
 
-    // USDC pricing (6 decimals) — must match server/src/pricing.ts
-    uint256 public constant PRICE_SHORT = 100e6;    // $100 for 3-4 character names
-    uint256 public constant PRICE_STANDARD = 5e6;   // $5 for 5+ character names
-
     // --- Storage ---
 
     IERC20 public usdc;
@@ -54,6 +50,10 @@ contract SoulinkRegistry is
     /// @dev name hash => encrypted soul data
     mapping(bytes32 => bytes) private _encryptedSouls;
 
+    /// USDC pricing (6 decimals) — must match server/src/pricing.ts
+    uint256 public priceShort;
+    uint256 public priceStandard;
+
     // --- Modifiers ---
 
     modifier onlyOperator() {
@@ -70,7 +70,9 @@ contract SoulinkRegistry is
 
     function initialize(
         address usdcAddress,
-        address initialOwner
+        address initialOwner,
+        uint256 _priceShort,
+        uint256 _priceStandard
     ) external initializer {
         __ERC721_init("Soulink", "SOUL");
         __Ownable_init(initialOwner);
@@ -78,6 +80,9 @@ contract SoulinkRegistry is
 
         usdc = IERC20(usdcAddress);
         _nextTokenId = 1;
+
+        priceShort = _priceShort;
+        priceStandard = _priceStandard;
     }
 
     // --- UUPS ---
@@ -226,11 +231,10 @@ contract SoulinkRegistry is
     /// @notice On-chain price reference for .agent names.
     /// @dev Actual payment is enforced off-chain via x402. This function serves
     ///      as the canonical on-chain price lookup for transparency and verification.
-    function getPrice(string calldata name) public pure returns (uint256) {
+    function getPrice(string calldata name) public view returns (uint256) {
         uint256 len = bytes(name).length;
         require(len >= MIN_NAME_LENGTH && len <= MAX_NAME_LENGTH, "Invalid name length");
-        if (len <= 4) return PRICE_SHORT;
-        return PRICE_STANDARD;
+        return len <= 4 ? priceShort : priceStandard;
     }
 
     function nameToTokenId(string calldata name) external view returns (uint256) {
@@ -291,6 +295,13 @@ contract SoulinkRegistry is
         usdc.safeTransfer(to, amount);
     }
 
+    function setPrices(uint256 _priceShort, uint256 _priceStandard) external onlyOwner {
+        require(_priceShort > 0 && _priceStandard > 0, "Invalid price");
+        priceShort = _priceShort;
+        priceStandard = _priceStandard;
+        emit PricesUpdated(_priceShort, _priceStandard);
+    }
+
     // --- Internal ---
 
     function _validateAndHash(string calldata name) internal pure returns (bytes32) {
@@ -320,5 +331,5 @@ contract SoulinkRegistry is
 
     // --- Storage Gap ---
 
-    uint256[50] private __gap;
+    uint256[48] private __gap;
 }
