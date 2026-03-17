@@ -11,6 +11,8 @@ interface ISoulinkRegistry {
         uint256 expiresAt;
     }
 
+    // --- Soulink Events ---
+
     event NameRegistered(
         string indexed indexedName,
         string name,
@@ -55,12 +57,15 @@ interface ISoulinkRegistry {
         string name
     );
 
-    /// @notice Register a name on behalf of an agent (called by API server after x402 payment)
-    /// @dev Only callable by authorized operator. No USDC transfer.
-    /// @param name The .agent name to register
-    /// @param agentOwner The wallet that will own the NFT
-    /// @param soulHash SHA-256 hash of Soul.md
-    /// @param paymentAddress Address to receive x402 payments for this agent
+    // --- ERC-8004 Events ---
+
+    event Registered(uint256 indexed agentId, string agentURI, address indexed owner);
+    event URIUpdated(uint256 indexed agentId, string newURI);
+    event MetadataSet(uint256 indexed agentId, string key);
+    event AgentWalletUpdated(uint256 indexed agentId, address wallet);
+
+    // --- Registration ---
+
     function registerFor(
         string calldata name,
         address agentOwner,
@@ -68,57 +73,39 @@ interface ISoulinkRegistry {
         address paymentAddress
     ) external;
 
-    /// @notice Resolve a name to its full agent identity
-    /// @param name The .agent name to resolve
-    /// @return identity The AgentIdentity struct
-    function resolve(string calldata name) external view returns (AgentIdentity memory identity);
+    function registerFor(
+        string calldata name,
+        address agentOwner,
+        bytes32 soulHash,
+        address paymentAddress,
+        string calldata agentURI
+    ) external;
 
-    /// @notice Renew on behalf of an agent (operator-only, no USDC transfer)
-    /// @param name The .agent name to renew
+    // --- Resolution ---
+
+    function resolve(string calldata name) external view returns (AgentIdentity memory identity);
     function renewFor(string calldata name) external;
 
-    /// @notice Update soul on behalf of an agent (operator-only)
-    /// @param name The .agent name
-    /// @param newSoulHash New SHA-256 hash of Soul.md
-    function updateSoulFor(
-        string calldata name,
-        bytes32 newSoulHash
-    ) external;
+    // --- Updates ---
 
-    /// @notice Update the payment address on behalf of an agent (operator-only)
-    /// @param name The .agent name
-    /// @param newPaymentAddress New address to receive payments
-    function updatePaymentAddressFor(
-        string calldata name,
-        address newPaymentAddress
-    ) external;
-
-    /// @notice Store encrypted soul data on behalf of an agent (operator-only)
-    /// @param name The .agent name
-    /// @param encryptedData Encrypted soul data
-    function storeEncryptedSoulFor(
-        string calldata name,
-        bytes calldata encryptedData
-    ) external;
-
-    /// @notice Get encrypted soul data for a name (anyone can read, only owner can decrypt)
-    /// @param name The .agent name
-    /// @return Encrypted soul data bytes
+    function updateSoulFor(string calldata name, bytes32 newSoulHash) external;
+    function updatePaymentAddressFor(string calldata name, address newPaymentAddress) external;
+    function storeEncryptedSoulFor(string calldata name, bytes calldata encryptedData) external;
     function getEncryptedSoul(string calldata name) external view returns (bytes memory);
 
-    /// @notice Check if a name is available for registration
-    /// @param name The name to check
-    /// @return True if available
+    // --- ERC-8004 Identity ---
+
+    function setAgentURI(uint256 agentId, string calldata newURI) external;
+    function getMetadata(uint256 agentId, string calldata key) external view returns (bytes memory);
+    function setMetadata(uint256 agentId, string calldata key, bytes calldata value) external;
+    function setAgentWalletFor(uint256 agentId, address wallet) external;
+    function getAgentWallet(uint256 agentId) external view returns (address);
+    function unsetAgentWallet(uint256 agentId) external;
+
+    // --- Queries ---
+
     function isAvailable(string calldata name) external view returns (bool);
-
-    /// @notice Get the annual price for a name in USDC (6 decimals)
-    /// @param name The name to price
-    /// @return USDC amount with 6 decimals
     function getPrice(string calldata name) external view returns (uint256);
-
-    /// @notice Get the token ID for a registered name
-    /// @param name The .agent name
-    /// @return tokenId The ERC-721 token ID
     function nameToTokenId(string calldata name) external view returns (uint256);
-
+    function tokenToName(uint256 tokenId) external view returns (string memory);
 }

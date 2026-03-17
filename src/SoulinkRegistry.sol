@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.24;
 
-import {ERC721Upgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/ERC721Upgradeable.sol";
+import {ERC721URIStorageUpgradeable} from "@openzeppelin/contracts-upgradeable/token/ERC721/extensions/ERC721URIStorageUpgradeable.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {PausableUpgradeable} from "@openzeppelin/contracts-upgradeable/utils/PausableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
@@ -11,13 +11,13 @@ import {SafeERC20} from "@openzeppelin/contracts/token/ERC20/utils/SafeERC20.sol
 import {ISoulinkRegistry} from "./interfaces/ISoulinkRegistry.sol";
 
 /// @title SoulinkRegistry
-/// @notice ERC-721 registry for .agent names on Base
+/// @notice ERC-721 registry for .agent names on Base, ERC-8004 compatible
 /// @dev Each name is an NFT. Agents pay via x402 operator flow.
 ///      Deployed behind a UUPS proxy for upgradeability.
 contract SoulinkRegistry is
     ISoulinkRegistry,
     Initializable,
-    ERC721Upgradeable,
+    ERC721URIStorageUpgradeable,
     OwnableUpgradeable,
     PausableUpgradeable,
     UUPSUpgradeable
@@ -30,34 +30,54 @@ contract SoulinkRegistry is
     uint256 public constant MIN_NAME_LENGTH = 3;
     uint256 public constant MAX_NAME_LENGTH = 32;
 
-    // --- Storage ---
+    // --- Storage (V1 — sequential, do NOT reorder) ---
 
     IERC20 public usdc;
     uint256 private _nextTokenId;
 
-    /// @dev Authorized API server operators
     mapping(address => bool) public operators;
-
-    /// @dev name hash => AgentIdentity
     mapping(bytes32 => AgentIdentity) private _identities;
-
-    /// @dev name hash => original name string
     mapping(bytes32 => string) private _nameStrings;
-
-    /// @dev token ID => name hash
     mapping(uint256 => bytes32) private _tokenToName;
-
-    /// @dev name hash => encrypted soul data
     mapping(bytes32 => bytes) private _encryptedSouls;
 
-    /// USDC pricing (6 decimals) — must match server/src/pricing.ts
     uint256 public priceShort;
     uint256 public priceStandard;
+
+    // --- ERC-8004 Storage (ERC-7201 namespaced — zero gap consumption) ---
+
+    /// @custom:storage-location erc7201:soulink.storage.ERC8004
+    struct ERC8004Storage {
+        mapping(uint256 => mapping(string => bytes)) metadata;
+        mapping(uint256 => address) agentWallets;
+    }
+
+    // keccak256(abi.encode(uint256(keccak256("soulink.storage.ERC8004")) - 1)) & ~bytes32(uint256(0xff))
+    bytes32 private constant ERC8004_STORAGE_LOCATION =
+        0xc3b2e0914a40714b26b4e4d063e62a9bf3b0b4fc9d62aa1b8e6f7c6c4a1c3e00;
+
+    function _getERC8004Storage() private pure returns (ERC8004Storage storage $) {
+        assembly {
+            $.slot := ERC8004_STORAGE_LOCATION
+        }
+    }
 
     // --- Modifiers ---
 
     modifier onlyOperator() {
         require(operators[msg.sender], "Not authorized operator");
+        _;
+    }
+
+    modifier onlyTokenAuth(uint256 tokenId) {
+        address tokenOwner = ownerOf(tokenId);
+        require(
+            msg.sender == tokenOwner ||
+            getApproved(tokenId) == msg.sender ||
+            isApprovedForAll(tokenOwner, msg.sender) ||
+            operators[msg.sender],
+            "Not authorized"
+        );
         _;
     }
 
@@ -85,20 +105,42 @@ contract SoulinkRegistry is
         priceStandard = _priceStandard;
     }
 
+    function initializeV2() external reinitializer(2) {
+        __ERC721URIStorage_init();
+    }
+
     // --- UUPS ---
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
 
     // --- Registration ---
 
-    /// @notice Register a name on behalf of an agent (called by API server after x402 payment)
-    /// @dev Only callable by authorized operator. No USDC transfer -- payment handled off-chain via x402.
     function registerFor(
         string calldata name,
         address agentOwner,
         bytes32 soulHash,
         address paymentAddress
     ) external whenNotPaused onlyOperator {
+        _registerFor(name, agentOwner, soulHash, paymentAddress, "");
+    }
+
+    function registerFor(
+        string calldata name,
+        address agentOwner,
+        bytes32 soulHash,
+        address paymentAddress,
+        string calldata agentURI
+    ) external whenNotPaused onlyOperator {
+        _registerFor(name, agentOwner, soulHash, paymentAddress, agentURI);
+    }
+
+    function _registerFor(
+        string calldata name,
+        address agentOwner,
+        bytes32 soulHash,
+        address paymentAddress,
+        string memory agentURI
+    ) internal {
         bytes32 nameHash = _validateAndHash(name);
 
         require(_isAvailableByHash(nameHash), "Name not available");
@@ -106,12 +148,12 @@ contract SoulinkRegistry is
         require(paymentAddress != address(0), "Invalid payment address");
         require(soulHash != bytes32(0), "Invalid soul hash");
 
-        // Clean up old registration if re-registering an expired name
         AgentIdentity storage existing = _identities[nameHash];
         if (existing.tokenId != 0 && block.timestamp > existing.expiresAt) {
             uint256 oldTokenId = existing.tokenId;
             delete _tokenToName[oldTokenId];
             delete _encryptedSouls[nameHash];
+            delete _getERC8004Storage().agentWallets[oldTokenId];
             _burn(oldTokenId);
         }
 
@@ -132,7 +174,14 @@ contract SoulinkRegistry is
 
         _mint(agentOwner, tokenId);
 
+        if (bytes(agentURI).length > 0) {
+            _setTokenURI(tokenId, agentURI);
+        }
+
+        _getERC8004Storage().agentWallets[tokenId] = paymentAddress;
+
         emit NameRegistered(name, name, agentOwner, tokenId, soulHash, paymentAddress, expiresAt);
+        emit Registered(tokenId, agentURI, agentOwner);
     }
 
     // --- Resolution ---
@@ -146,26 +195,22 @@ contract SoulinkRegistry is
 
     // --- Renewal ---
 
-    /// @notice Renew a name on behalf of an agent (called by API server after x402 payment)
-    /// @dev Only callable by authorized operator. No USDC transfer.
     function renewFor(string calldata name) external whenNotPaused onlyOperator {
         bytes32 nameHash = keccak256(abi.encodePacked(name));
         AgentIdentity storage identity = _identities[nameHash];
 
         require(identity.tokenId != 0, "Name not registered");
 
-        uint256 base = block.timestamp > identity.expiresAt
+        uint256 base_ = block.timestamp > identity.expiresAt
             ? block.timestamp
             : identity.expiresAt;
-        identity.expiresAt = base + REGISTRATION_PERIOD;
+        identity.expiresAt = base_ + REGISTRATION_PERIOD;
 
         emit NameRenewed(name, name, identity.expiresAt);
     }
 
     // --- Updates ---
 
-    /// @notice Update soul on behalf of an agent (called by API server)
-    /// @dev Only callable by authorized operator.
     function updateSoulFor(
         string calldata name,
         bytes32 newSoulHash
@@ -181,8 +226,6 @@ contract SoulinkRegistry is
         emit SoulUpdated(name, name, newSoulHash);
     }
 
-    /// @notice Update the payment address on behalf of an agent (operator-only)
-    /// @dev Only callable by authorized operator.
     function updatePaymentAddressFor(
         string calldata name,
         address newPaymentAddress
@@ -194,14 +237,14 @@ contract SoulinkRegistry is
         require(newPaymentAddress != address(0), "Invalid payment address");
 
         identity.paymentAddress = newPaymentAddress;
+        _getERC8004Storage().agentWallets[identity.tokenId] = newPaymentAddress;
 
         emit PaymentAddressUpdated(name, name, newPaymentAddress);
+        emit AgentWalletUpdated(identity.tokenId, newPaymentAddress);
     }
 
     // --- Encrypted Soul ---
 
-    /// @notice Store encrypted soul data on behalf of an agent (operator-only)
-    /// @dev Only callable by authorized operator.
     function storeEncryptedSoulFor(
         string calldata name,
         bytes calldata encryptedData
@@ -221,6 +264,44 @@ contract SoulinkRegistry is
         return _encryptedSouls[nameHash];
     }
 
+    // --- ERC-8004 Identity ---
+
+    function setAgentURI(uint256 agentId, string calldata newURI) external whenNotPaused onlyTokenAuth(agentId) {
+        _setTokenURI(agentId, newURI);
+        emit URIUpdated(agentId, newURI);
+    }
+
+    function getMetadata(uint256 agentId, string calldata key) external view returns (bytes memory) {
+        return _getERC8004Storage().metadata[agentId][key];
+    }
+
+    function setMetadata(
+        uint256 agentId,
+        string calldata key,
+        bytes calldata value
+    ) external whenNotPaused onlyTokenAuth(agentId) {
+        _getERC8004Storage().metadata[agentId][key] = value;
+        emit MetadataSet(agentId, key);
+    }
+
+    function setAgentWalletFor(uint256 agentId, address wallet) external whenNotPaused onlyOperator {
+        _getERC8004Storage().agentWallets[agentId] = wallet;
+        emit AgentWalletUpdated(agentId, wallet);
+    }
+
+    function getAgentWallet(uint256 agentId) external view returns (address) {
+        address wallet = _getERC8004Storage().agentWallets[agentId];
+        if (wallet != address(0)) return wallet;
+        bytes32 nameHash = _tokenToName[agentId];
+        if (nameHash != bytes32(0)) return _identities[nameHash].paymentAddress;
+        return address(0);
+    }
+
+    function unsetAgentWallet(uint256 agentId) external whenNotPaused onlyTokenAuth(agentId) {
+        delete _getERC8004Storage().agentWallets[agentId];
+        emit AgentWalletUpdated(agentId, address(0));
+    }
+
     // --- Queries ---
 
     function isAvailable(string calldata name) external view returns (bool) {
@@ -228,9 +309,6 @@ contract SoulinkRegistry is
         return _isAvailableByHash(nameHash);
     }
 
-    /// @notice On-chain price reference for .agent names.
-    /// @dev Actual payment is enforced off-chain via x402. This function serves
-    ///      as the canonical on-chain price lookup for transparency and verification.
     function getPrice(string calldata name) public view returns (uint256) {
         uint256 len = bytes(name).length;
         require(len >= MIN_NAME_LENGTH && len <= MAX_NAME_LENGTH, "Invalid name length");
@@ -244,14 +322,13 @@ contract SoulinkRegistry is
         return tokenId;
     }
 
-    /// @notice Get the name string for a token ID
     function tokenToName(uint256 tokenId) external view returns (string memory) {
         bytes32 nameHash = _tokenToName[tokenId];
         require(nameHash != bytes32(0), "Token not found");
         return _nameStrings[nameHash];
     }
 
-    // --- ERC-721 Override: sync identity owner on transfer ---
+    // --- ERC-721 Override: sync identity owner + clear agentWallet on transfer ---
 
     function _update(
         address to,
@@ -260,18 +337,28 @@ contract SoulinkRegistry is
     ) internal override returns (address from) {
         from = super._update(to, tokenId, auth);
 
-        // Only update identity owner for regular transfers (not mint/burn),
-        // and only if this token is the CURRENT token for the name.
-        // Stale tokens from expired re-registrations must not corrupt ownership.
         if (from != address(0) && to != address(0)) {
             bytes32 nameHash = _tokenToName[tokenId];
             if (nameHash != bytes32(0) && _identities[nameHash].tokenId == tokenId) {
                 _identities[nameHash].owner = to;
+                _identities[nameHash].paymentAddress = to;
+                _getERC8004Storage().agentWallets[tokenId] = address(0);
                 emit NameTransferred(_nameStrings[nameHash], _nameStrings[nameHash], from, to);
             }
         }
 
         return from;
+    }
+
+    // --- supportsInterface ---
+
+    function supportsInterface(bytes4 interfaceId)
+        public
+        view
+        override(ERC721URIStorageUpgradeable)
+        returns (bool)
+    {
+        return super.supportsInterface(interfaceId);
     }
 
     // --- Admin ---
@@ -314,9 +401,9 @@ contract SoulinkRegistry is
 
         for (uint256 i = 0; i < len; i++) {
             bytes1 c = b[i];
-            bool valid = (c >= 0x61 && c <= 0x7A)  // a-z
-                || (c >= 0x30 && c <= 0x39)          // 0-9
-                || c == 0x2D;                         // hyphen
+            bool valid = (c >= 0x61 && c <= 0x7A)
+                || (c >= 0x30 && c <= 0x39)
+                || c == 0x2D;
             require(valid, "Invalid character");
         }
 
@@ -325,7 +412,6 @@ contract SoulinkRegistry is
 
     function _isAvailableByHash(bytes32 nameHash) internal view returns (bool) {
         AgentIdentity storage identity = _identities[nameHash];
-        // Available if never registered OR expired
         return identity.tokenId == 0 || block.timestamp > identity.expiresAt;
     }
 
